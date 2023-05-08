@@ -11,8 +11,8 @@ project(NONE)
 # NORDIC SDK APP START
 target_sources(app PRIVATE
   src/main.c
-  src/led.c
-  src/tem.c
+  src/ble_char.c
+  src/si7006.c
 
 )
 

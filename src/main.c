@@ -1,9 +1,3 @@
-/*
- * Copyright (c) 2018 Nordic Semiconductor ASA
- *
- * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
- */
-
 #include <zephyr/types.h>
 #include <stddef.h>
 #include <string.h>
@@ -24,22 +18,20 @@
 
 #include <zephyr/settings/settings.h>
 
-#include <dk_buttons_and_leds.h>
-#include "led.h"
+
+#include "ble_char.h"
+
+#define DEVICE_NAME CONFIG_BT_DEVICE_NAME
+#define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
 
 
 
-#define DEVICE_NAME             CONFIG_BT_DEVICE_NAME
-#define DEVICE_NAME_LEN         (sizeof(DEVICE_NAME) - 1)
 
-
-#define RUN_STATUS_LED          DK_LED2
-#define CON_STATUS_LED          DK_LED1
-#define RUN_LED_BLINK_INTERVAL  1000
-
-#define USER_LED                DK_LED3
-
-#define USER_BUTTON             DK_BTN1_MSK
+int cTemp;
+int ble_temp ;
+int humidity;
+int ble_hum ;
+int timer_val=10;
 
 static bool app_button_state;
 
@@ -54,43 +46,45 @@ static const struct bt_data sd[] = {
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
-	if (err) {
+	if (err)
+	{
 		printk("Connection failed (err %u)\n", err);
 		return;
 	}
 
 	printk("Connected\n");
 
-	dk_set_led_on(CON_STATUS_LED);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	printk("Disconnected (reason %u)\n", reason);
 
-	dk_set_led_off(CON_STATUS_LED);
 }
 
 #ifdef CONFIG_BT_LBS_SECURITY_ENABLED
 static void security_changed(struct bt_conn *conn, bt_security_t level,
-			     enum bt_security_err err)
+							 enum bt_security_err err)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	if (!err) {
+	if (!err)
+	{
 		printk("Security changed: %s level %u\n", addr, level);
-	} else {
+	}
+	else
+	{
 		printk("Security failed: %s level %u err %d\n", addr, level,
-			err);
+			   err);
 	}
 }
 #endif
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
-	.connected        = connected,
-	.disconnected     = disconnected,
+	.connected = connected,
+	.disconnected = disconnected,
 #ifdef CONFIG_BT_LBS_SECURITY_ENABLED
 	.security_changed = security_changed,
 #endif
@@ -140,123 +134,81 @@ static struct bt_conn_auth_cb conn_auth_callbacks = {
 
 static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
-	.pairing_failed = pairing_failed
-};
+	.pairing_failed = pairing_failed};
 #else
 static struct bt_conn_auth_cb conn_auth_callbacks;
 static struct bt_conn_auth_info_cb conn_auth_info_callbacks;
 #endif
 
-void app_led_cb(bool led_state)
+
+void tcp_work_handler(struct k_work *work)
 {
-	printk("cb_called\n");
-	dk_set_led(USER_LED, led_state);
+	/* do the processing that needs to be done periodically */
+	si7006();
+	ble_temp = cTemp * 100;
+	ble_hum = humidity * 100;
+	hum_notify();
+	temp_notify();
 }
 
-static bool app_button_cb(void)
+K_WORK_DEFINE(tcp_work, tcp_work_handler);
+void tcp_timer_handler(struct k_timer *dummy)
 {
-	return app_button_state;
+	k_work_submit(&tcp_work);
 }
 
-static struct bt_lbs_cb lbs_callbacs = {
-	.led_cb    = app_led_cb,
-	.button_cb = app_button_cb,
-};
-
-static void button_changed(uint32_t button_state, uint32_t has_changed)
-{
-	if (has_changed & USER_BUTTON) {
-		uint32_t user_button_state = button_state & USER_BUTTON;
-
-		bt_lbs_send_button_state(user_button_state);
-		app_button_state = user_button_state ? true : false;
-	}
-}
-
-static int init_button(void)
-{
-	int err;
-
-	err = dk_buttons_init(button_changed);
-	if (err) {
-		printk("Cannot init buttons (err: %d)\n", err);
-	}
-
-	return err;
-}
+struct k_timer tcp_timer;
 
 void main(void)
 {
-	int blink_status = 0;
 	int err;
 
 	printk("Starting Bluetooth Peripheral LBS example\n");
 
-	err = dk_leds_init();
-	if (err) {
-		printk("LEDs init failed (err %d)\n", err);
-		return;
-	}
 
-	// err = init_button();
-	if (err) {
-		printk("Button init failed (err %d)\n", err);
-		return;
-	}
-
-	if (IS_ENABLED(CONFIG_BT_LBS_SECURITY_ENABLED)) {
+	if (IS_ENABLED(CONFIG_BT_LBS_SECURITY_ENABLED))
+	{
 		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
-		if (err) {
+		if (err)
+		{
 			printk("Failed to register authorization callbacks.\n");
 			return;
 		}
 
 		err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
-		if (err) {
+		if (err)
+		{
 			printk("Failed to register authorization info callbacks.\n");
 			return;
 		}
 	}
 
 	err = bt_enable(NULL);
-	if (err) {
+	if (err)
+	{
 		printk("Bluetooth init failed (err %d)\n", err);
 		return;
 	}
 
 	printk("Bluetooth initialized\n");
 
-	if (IS_ENABLED(CONFIG_SETTINGS)) {
+	if (IS_ENABLED(CONFIG_SETTINGS))
+	{
 		settings_load();
 	}
 
-	//err = bt_lbs_init(&lbs_callbacs);
-	if (err) {
-		printk("Failed to init LBS (err:%d)\n", err);
-		return;
-	}
 
 	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
-			      sd, ARRAY_SIZE(sd));
-	if (err) {
+						  sd, ARRAY_SIZE(sd));
+	if (err)
+	{
 		printk("Advertising failed to start (err %d)\n", err);
 		return;
 	}
 
 	printk("Advertising successfully started\n");
 
-	for (;;) {
-		si7004();
-   
-		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
-		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
-	}
-
-
-   
-
-
-
-
+	// timer
+	k_timer_init(&tcp_timer, tcp_timer_handler, NULL);
+	k_timer_start(&tcp_timer, K_SECONDS(0), K_SECONDS(timer_val));
 }
-
